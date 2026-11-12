@@ -1,0 +1,21 @@
+state:
+  candidate: "{candidate_image}"
+questions:
+  visual_consistency:
+    type: score
+    instructions:
+      context: >-
+        Six images are supplied: candidate C is `candidate` in the state;
+        five known-real reference images R1-R5 are supplied below in order.
+        Compare C with the visual appearance of defects and background in R1-R5.
+        The candidate may or may not come from the same real-image distribution.
+      references: ["{reference_1}", "{reference_2}", "{reference_3}", "{reference_4}", "{reference_5}"]
+      question: >-
+        How visually consistent is candidate C with the appearance of defects
+        and background in the known-real references R1-R5?
+    criteria:
+      - Clearly inconsistent with the references
+      - Mostly inconsistent with the references
+      - Mixed or uncertain consistency with the references
+      - Mostly consistent with the references
+      - Highly consistent with the references

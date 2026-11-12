@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-self-evaluation-module"
+version = "0.1.0"
+description = "Reference-based image evaluation and checkpoint early stopping with decision APIs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["Pillow>=10", "PyYAML>=6", "requests>=2.31", "numpy>=1.24", "matplotlib>=3.7"]
+license = "MIT"
+keywords = ["generative-models", "early-stopping", "image-evaluation", "decision-models"]
+
+[project.urls]
+Repository = "https://github.com/Filippo9292/AI-self-evaluation-module"
+Issues = "https://github.com/Filippo9292/AI-self-evaluation-module/issues"
+
+[project.scripts]
+ai-self-evaluation = "ai_self_evaluation.cli:self_evaluation"
+ai-early-stopping = "ai_self_evaluation.cli:early_stopping"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ai_self_evaluation = ["presets/*.yaml", "presets/providers/*.yaml"]

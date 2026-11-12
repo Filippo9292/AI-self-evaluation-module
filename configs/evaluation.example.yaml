@@ -1,0 +1,19 @@
+# Copy to evaluation.local.yaml. Relative paths resolve beside THIS file.
+provider: jev
+api_key: "PASTE_YOUR_API_KEY_HERE"
+real_image_dirs: ["../dataset/train/target", "../dataset/validation/target"]
+generated_image_dir: "../generated"
+output_dir: "../outputs/evaluation"
+
+# Optional: a provider YAML, an advanced-settings YAML, and a protocol YAML.
+# Omit to use the packaged defaults. Never alter these during a training run.
+provider_file: null
+advanced_file: null
+protocol_file: null
+
+# Optional overrides. Defaults are visible in configs/advanced.example.yaml.
+settings: {}
+# To edit state/questions directly, copy configs/protocol.example.yaml here as:
+# evaluation:
+#   state: ...
+#   questions: ...
