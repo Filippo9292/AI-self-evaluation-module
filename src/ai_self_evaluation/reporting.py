@@ -8,26 +8,27 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from .util import read_json,write_csv
 
-GENERATED='#008e96'
-GENERATED_FILL='#bde4e1'
-REAL_TARGET='#cbd5e1'
-REAL_CONTROL='#e8edf3'
-INK='#26384a'
-EDGE='#8797a8'
+GENERATED='#c55e26'
+GENERATED_FILL='#f4b183'
+EPOCH_FILLS=('#f6bd60','#f7d9c4','#e78b73','#e8c56d','#d9a066','#f3a84b','#ecc1ae')
+REAL_TARGET='#cad7e2'
+REAL_CONTROL='#dfe8df'
+INK='#43352e'
+EDGE='#9b8d82'
 
 def style_figure(fig):
-    fig.set_facecolor('#f8fafc')
+    fig.set_facecolor('#fffaf5')
     for ax in fig.axes:
         ax.set_facecolor('white');ax.set_axisbelow(True)
         for side in ('top','right'):ax.spines[side].set_visible(False)
         for side in ('left','bottom'):
-            ax.spines[side].set_color('#bdc8d4');ax.spines[side].set_linewidth(.8)
+            ax.spines[side].set_color('#d2c6bc');ax.spines[side].set_linewidth(.8)
         ax.tick_params(colors=INK,labelsize=9)
         ax.title.set_color(INK);ax.xaxis.label.set_color(INK);ax.yaxis.label.set_color(INK)
-        ax.grid(axis='y',color='#dce4ed',alpha=.75,linewidth=.7)
+        ax.grid(axis='y',color='#ece4dc',alpha=.8,linewidth=.7)
         legend=ax.get_legend()
         if legend:
-            legend.get_frame().set_facecolor('white');legend.get_frame().set_edgecolor('#dce4ed');legend.get_frame().set_alpha(.95)
+            legend.get_frame().set_facecolor('white');legend.get_frame().set_edgecolor('#e5d9ce');legend.get_frame().set_alpha(.95)
     if fig._suptitle:fig._suptitle.set_color(INK)
 
 def normalized(rows,norm,key):
@@ -67,10 +68,12 @@ def training_report(root,baseline,observations,settings,policy=None):
             if values:stats.append(dict(metric=key,epoch=o['epoch'],group='generated',**box_stats(values)))
             if o in selected and values:positions.append(o['epoch']);data.append(values)
         if data:
-            ax.boxplot(data,positions=positions,widths=min(settings['boxplot_every_epochs']*.5,24),manage_ticks=False,patch_artist=True,boxprops=dict(facecolor=GENERATED_FILL,edgecolor='#75a8a5',linewidth=.9),medianprops=dict(color=INK,linewidth=1.4),whiskerprops=dict(color=EDGE),capprops=dict(color=EDGE),flierprops=dict(marker='o',markersize=2,markerfacecolor=EDGE,markeredgecolor='none',alpha=.45))
+            boxes=ax.boxplot(data,positions=positions,widths=min(settings['boxplot_every_epochs']*.5,24),manage_ticks=False,patch_artist=True,boxprops=dict(edgecolor='#aa8064',linewidth=.9),medianprops=dict(color=INK,linewidth=1.4),whiskerprops=dict(color=EDGE),capprops=dict(color=EDGE),flierprops=dict(marker='o',markersize=2,markerfacecolor=EDGE,markeredgecolor='none',alpha=.45))
+            for box,epoch in zip(boxes['boxes'],positions):
+                box.set_facecolor(EPOCH_FILLS[(epoch//settings['boxplot_every_epochs'])%len(EPOCH_FILLS)])
             if k>0:ax.scatter(positions,[np.mean(v) for v in data],color=GENERATED,s=18,edgecolors='white',linewidths=.45,zorder=4,label='Per-epoch mean')
         curve=[o for o in observations if o['decision'][key+'_smooth'] is not None]
-        if curve:ax.plot([o['epoch'] for o in curve],[o['decision'][key+'_smooth'] for o in curve],color='#008e96',label='Smoothed controller aggregate')
+        if curve:ax.plot([o['epoch'] for o in curve],[o['decision'][key+'_smooth'] for o in curve],color=GENERATED,label='Smoothed controller aggregate')
         ts=[threshold['quality_enter_ratio'],threshold['quality_exit_ratio']] if k==0 else [threshold['defect_enter_normalized'],threshold['defect_exit_normalized']] if k==1 else [threshold['progress_max']]
         for j,t in enumerate(ts):ax.axhline(t,color='#333' if j==0 else '#888',ls='--' if j==0 else ':',label='Threshold '+str(t))
         stop=next((o['epoch'] for o in observations if o['decision']['first_stop']),None)
@@ -89,11 +92,11 @@ def controller_curves(folder,observations,settings,policy):
     fig,axes=plt.subplots(4,1,figsize=(12,10),sharex=True,layout='constrained')
     for ax,key,title in zip(axes[:3],('quality','defect','progress'),('Normalized quality Q','Normalized feature presence D','Temporal preference P')):
         valid=[o for o in observations if o['decision'][key+'_smooth'] is not None]
-        if valid:ax.plot([o['epoch'] for o in valid],[o['decision'][key+'_smooth'] for o in valid],color='#008e96',label='Smoothed aggregate')
+        if valid:ax.plot([o['epoch'] for o in valid],[o['decision'][key+'_smooth'] for o in valid],color=GENERATED,label='Smoothed aggregate')
         thresholds=[policy['quality_enter_ratio'],policy['quality_exit_ratio']] if key=='quality' else [policy['defect_enter_normalized'],policy['defect_exit_normalized']] if key=='defect' else [policy['progress_max']]
         for j,t in enumerate(thresholds):ax.axhline(t,color='#333' if j==0 else '#888',ls='--' if j==0 else ':',label='Threshold '+str(t))
         ax.set_ylabel(title);ax.grid(alpha=.2);ax.legend(fontsize=8,loc='best')
-    axes[3].plot([o['epoch'] for o in observations],[o['decision']['elapsed'] for o in observations],color='#7563a7',label='Consecutive confirmation span')
+    axes[3].plot([o['epoch'] for o in observations],[o['decision']['elapsed'] for o in observations],color='#b57932',label='Consecutive confirmation span')
     axes[3].axhline(policy['confirmation_epochs'],color='#333',ls='--',label='Required '+str(policy['confirmation_epochs'])+' epochs')
     axes[3].set_ylabel('Confirmation (epochs)');axes[3].set_xlabel('Epoch');axes[3].grid(alpha=.2);axes[3].legend(fontsize=8,loc='best')
     stop=next((o['epoch'] for o in observations if o['decision']['first_stop']),None)
@@ -117,7 +120,7 @@ def inference_report(folder,baseline,rows,settings):
         boxes=ax.boxplot(datasets,showmeans=True,patch_artist=True,medianprops=dict(color=INK,linewidth=1.6),whiskerprops=dict(color=EDGE,linewidth=1),capprops=dict(color=EDGE),flierprops=dict(marker='o',markersize=3,markerfacecolor=EDGE,markeredgecolor='none',alpha=.5),meanprops=dict(marker='D',markersize=5,markerfacecolor=GENERATED,markeredgecolor='white',markeredgewidth=.7))
         fills=[REAL_TARGET,GENERATED_FILL] if key=='quality' else [REAL_CONTROL,REAL_TARGET,GENERATED_FILL]
         for i,(box,fill) in enumerate(zip(boxes['boxes'],fills)):
-            box.set(facecolor=fill,edgecolor='#75a8a5' if i==len(fills)-1 else EDGE,linewidth=1.1)
+            box.set(facecolor=fill,edgecolor='#aa8064' if i==len(fills)-1 else EDGE,linewidth=1.1)
             if i<len(fills)-1:boxes['means'][i].set_markerfacecolor('#60758d')
         ax.set_xticks(range(1,len(names)+1),names);ax.set_title('Normalized '+key);ax.grid(axis='y',alpha=.2)
         stats.extend(dict(metric=key,group=name,**box_stats(v)) for name,v in zip(names,datasets))
