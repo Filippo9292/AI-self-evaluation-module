@@ -1,93 +1,95 @@
-"""Regenerable research figures. Box whiskers are Tukey whiskers, not confidence intervals."""
-import html
+"""Reusable boxplot output: distributions, real anchors, means and controller curves."""
+import base64
+import io
 from pathlib import Path
-
+import numpy as np
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from .util import read_json,write_csv
 
-from .util import read_json, write_csv, write_json
+def normalized(rows,norm,key):
+    if key=='quality':return [r['QI']/norm['quality_reference'] for r in rows]
+    if key=='defect':return [(r['D2']-norm['healthy_reference'])/norm['defect_span'] for r in rows]
+    return [r['R1_balanced'] for r in rows if r['R1_balanced'] is not None]
 
+def box_stats(values):
+    q1,med,q3=np.quantile(values,[.25,.5,.75]);v=np.array(values);inside=v[(v>=q1-1.5*(q3-q1))&(v<=q3+1.5*(q3-q1))]
+    return dict(n=len(v),q1=float(q1),median=float(med),q3=float(q3),mean=float(v.mean()),whisker_low=float(inside.min()),whisker_high=float(inside.max()))
 
-def box(summary, label):
-    return {"label": label, "med": summary["median"], "q1": summary["q25"], "q3": summary["q75"],
-            "whislo": summary["whisker_low"], "whishi": summary["whisker_high"], "fliers": summary["outliers"]}
+def finish(fig,folder,settings,title):
+    folder=Path(folder);folder.mkdir(parents=True,exist_ok=True);buffer=io.BytesIO()
+    fig.savefig(buffer,format='png',dpi=settings['dpi'])
+    if 'png' in settings['formats']:(folder/'boxplots.png').write_bytes(buffer.getvalue())
+    if 'pdf' in settings['formats']:fig.savefig(folder/'boxplots.pdf')
+    if 'html' in settings['formats']:
+        image=base64.b64encode(buffer.getvalue()).decode()
+        (folder/'report.html').write_text('<!doctype html><meta charset="utf-8"><title>'+title+'</title><style>body{font:16px system-ui;margin:25px}img{max-width:100%}</style><h1>'+title+'</h1><p>Boxes show image distributions. Colored dots show means for D/P. Curves show the controller aggregates after temporal smoothing. Reference boxes contain original-real images.</p><img alt="Evaluation boxplots" src="data:image/png;base64,'+image+'">',encoding='utf-8')
+    plt.close(fig)
 
+def training_report(root,baseline,observations,settings,policy=None):
+    root=Path(root);norm=baseline['normalizers'];fig,axes=plt.subplots(3,1,figsize=(14,10),layout='constrained')
+    keys=['quality','defect','progress'];titles=['Normalized quality Q','Normalized feature presence D','Temporal preference P']
+    threshold=policy or read_json(root/'identity.json')['configuration']['settings']['policy']
+    selected=[o for o in observations if o['epoch']%settings['boxplot_every_epochs']==0 or settings['include_first_epoch'] and o is observations[0]]
+    stats=[]
+    for k,(ax,key,title) in enumerate(zip(axes,keys,titles)):
+        for bank,x in ([('target',-40)] if k==0 else [('control',-90),('target',-40)] if k==1 else []):
+            values=normalized(baseline[bank],norm,key)
+            ax.boxplot([values],positions=[x],widths=22,manage_ticks=False,patch_artist=True,boxprops=dict(facecolor='#c2c8d0'),flierprops=dict(marker='.',markersize=2))
+            stats.append(dict(metric=key,epoch='',group='real_'+bank,**box_stats(values)))
+        positions=[];data=[]
+        for o in observations:
+            rows=read_json(root/'training'/('epoch_'+str(o['epoch']).zfill(6))/'scores.json');values=normalized(rows,norm,key)
+            if values:stats.append(dict(metric=key,epoch=o['epoch'],group='generated',**box_stats(values)))
+            if o in selected and values:positions.append(o['epoch']);data.append(values)
+        if data:
+            ax.boxplot(data,positions=positions,widths=min(settings['boxplot_every_epochs']*.5,24),manage_ticks=False,patch_artist=True,boxprops=dict(facecolor='#9ed7d4',alpha=.6),medianprops=dict(color='#152b36'),flierprops=dict(marker='.',markersize=2,alpha=.4))
+            if k>0:ax.scatter(positions,[np.mean(v) for v in data],color='#008e96',s=13,label='Per-epoch mean')
+        curve=[o for o in observations if o['decision'][key+'_smooth'] is not None]
+        if curve:ax.plot([o['epoch'] for o in curve],[o['decision'][key+'_smooth'] for o in curve],color='#008e96',label='Smoothed controller aggregate')
+        ts=[threshold['quality_enter_ratio'],threshold['quality_exit_ratio']] if k==0 else [threshold['defect_enter_normalized'],threshold['defect_exit_normalized']] if k==1 else [threshold['progress_max']]
+        for j,t in enumerate(ts):ax.axhline(t,color='#333' if j==0 else '#888',ls='--' if j==0 else ':',label='Threshold '+str(t))
+        stop=next((o['epoch'] for o in observations if o['decision']['first_stop']),None)
+        if stop is not None:ax.axvline(stop,color='#c33',ls=':',label='First stop '+str(stop))
+        xmax=max(o['epoch'] for o in observations);xticks=list(range(0,xmax+1,max(50,50*((xmax//10)//50))))
+        ax.set_xticks(([-40] if k==0 else [-90,-40] if k==1 else [])+xticks,(['Real target'] if k==0 else ['Real control','Real target'] if k==1 else [])+[str(x) for x in xticks],fontsize=8)
+        ax.set_title(title);ax.set_xlabel('Epoch');ax.set_xlim(-120,max(70,xmax+20));ax.grid(axis='y',alpha=.2);ax.legend(fontsize=8,loc='best')
+    fig.suptitle('Reference-based evaluation: image distributions and early-stopping signals')
+    write_csv(root/'training/boxplot_statistics.csv',stats)
+    write_csv(root/'training/epoch_summary.csv',[dict(o['event'],**o['decision']) for o in observations])
+    finish(fig,root/'training',settings,'Training evaluation')
+    controller_curves(root/'training',observations,settings,threshold)
 
-def save_figure(figure, stem):
-    figure.savefig(str(stem) + ".png", dpi=160, bbox_inches="tight")
-    figure.savefig(str(stem) + ".svg", bbox_inches="tight")
-    plt.close(figure)
+def controller_curves(folder,observations,settings,policy):
+    folder=Path(folder)
+    fig,axes=plt.subplots(4,1,figsize=(12,10),sharex=True,layout='constrained')
+    for ax,key,title in zip(axes[:3],('quality','defect','progress'),('Normalized quality Q','Normalized feature presence D','Temporal preference P')):
+        valid=[o for o in observations if o['decision'][key+'_smooth'] is not None]
+        if valid:ax.plot([o['epoch'] for o in valid],[o['decision'][key+'_smooth'] for o in valid],color='#008e96',label='Smoothed aggregate')
+        thresholds=[policy['quality_enter_ratio'],policy['quality_exit_ratio']] if key=='quality' else [policy['defect_enter_normalized'],policy['defect_exit_normalized']] if key=='defect' else [policy['progress_max']]
+        for j,t in enumerate(thresholds):ax.axhline(t,color='#333' if j==0 else '#888',ls='--' if j==0 else ':',label='Threshold '+str(t))
+        ax.set_ylabel(title);ax.grid(alpha=.2);ax.legend(fontsize=8,loc='best')
+    axes[3].plot([o['epoch'] for o in observations],[o['decision']['elapsed'] for o in observations],color='#7563a7',label='Consecutive confirmation span')
+    axes[3].axhline(policy['confirmation_epochs'],color='#333',ls='--',label='Required '+str(policy['confirmation_epochs'])+' epochs')
+    axes[3].set_ylabel('Confirmation (epochs)');axes[3].set_xlabel('Epoch');axes[3].grid(alpha=.2);axes[3].legend(fontsize=8,loc='best')
+    stop=next((o['epoch'] for o in observations if o['decision']['first_stop']),None)
+    if stop is not None:
+        for ax in axes:ax.axvline(stop,color='#c33',ls=':')
+    fig.suptitle('Controller signals and confirmation'+(' - first stop '+str(stop) if stop is not None else ''))
+    buffer=io.BytesIO();fig.savefig(buffer,format='png',dpi=settings['dpi'])
+    if 'png' in settings['formats']:(folder/'curves.png').write_bytes(buffer.getvalue())
+    if 'pdf' in settings['formats']:fig.savefig(folder/'curves.pdf')
+    if 'html' in settings['formats']:
+        report=folder/'report.html';previous=report.read_text(encoding='utf-8')
+        report.write_text(previous+'<h2>Controller curves</h2><img alt="Controller signals and confirmation" src="data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode()+'">',encoding='utf-8')
+    plt.close(fig)
 
-
-def boxes(summaries, labels, stem, title, synthetic=False):
-    figure, axis = plt.subplots(figsize=(max(6.4, len(labels) * .6), 4.8))
-    artists = axis.bxp([box(s, label) for s, label in zip(summaries, labels)], showfliers=True, patch_artist=True)
-    for index, artist in enumerate(artists["boxes"]):
-        artist.set_facecolor("#b8c3cb" if index == 0 else "#5c9ba2")
-    axis.set(ylim=(-.1, 4.1), ylabel="Visual consistency score (0-4)", title=title)
-    axis.grid(axis="y", alpha=.2)
-    if len(labels) > 8:
-        axis.tick_params(axis="x", labelrotation=60)
-    figure.text(.02, .005, "SYNTHETIC MOCK - not model-quality evidence" if synthetic else "One value per image: mean across visits. Whiskers: Tukey 1.5 IQR.", fontsize=8)
-    figure.tight_layout(rect=(0, .04, 1, 1))
-    save_figure(figure, stem)
-
-
-def baseline_report(root, summary, synthetic):
-    folder = root / "baseline"
-    boxes([summary], [f"Real (n={summary['n']})"], folder / "real_boxplot", "Real-to-real reference", synthetic)
-
-
-def inference_report(folder, real, generated, rows, usage, distance):
-    synthetic = usage["synthetic"]
-    boxes([real, generated], [f"Real (n={real['n']})", f"Generated (n={generated['n']})"], folder / "comparison", "Inference evaluation", synthetic)
-    write_json(folder / "comparison.json", {"real": real, "generated": generated, "box_distance": distance, "usage": usage})
-    cells = "".join("<tr><td>" + html.escape(str(row["file_path"])) + "</td><td>" + f"{row['score_mean']:.4f}" + "</td><td>" + f"{row['score_std_across_visits']:.4f}" + "</td></tr>" for row in rows)
-    warning = "<p class='notice'>SYNTHETIC MOCK DATA: this is a software demonstration, not an image-quality experiment.</p>" if synthetic else ""
-    content = f"""<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI Self Evaluation - inference</title><style>body{{font:16px system-ui;margin:32px auto;padding:0 20px;max-width:1100px;color:#20333b}}img{{max-width:100%}}table{{border-collapse:collapse;width:100%}}td,th{{padding:9px;text-align:left;border-bottom:1px solid #ddd;overflow-wrap:anywhere}}.notice{{background:#fff0c2;padding:16px}}code{{background:#eef3f5}}</style>
-<h1>Inference evaluation</h1>{warning}<p>Box distance to the real reference: <b>{distance:.5f}</b>. Scores describe consistency with the supplied references; they are not probabilities of correctness or downstream utility.</p>
-<img src="comparison.png" alt="Real and generated score box plots"><p>Each box uses per-image means. Whiskers are Tukey 1.5 IQR, not confidence intervals. Both sets use the same evaluation protocol.</p>
-<p>Machine-readable results: <a href="scores.csv">scores.csv</a>, <a href="comparison.json">comparison.json</a>.</p>
-<table><thead><tr><th>Image</th><th>Mean score</th><th>SD across visits</th></tr></thead><tbody>{cells}</tbody></table></html>"""
-    (folder / "report.html").write_text(content, encoding="utf-8")
-
-
-def training_report(root, real, observations, settings, synthetic):
-    folder = root / "training"
-    folder.mkdir(exist_ok=True)
-    summaries, labels = [real], ["Real"]
-    rows = []
-    for observation in observations:
-        summaries.append(observation["summary"])
-        labels.append(str(observation["epoch"]))
-        rows.append({"epoch": observation["epoch"], "distance": observation["distance"], **observation["summary"],
-                     "best_epoch": observation["decision"]["best_epoch"], "stalled_epochs": observation["decision"]["stalled_epochs"],
-                     "should_stop": observation["decision"]["should_stop"], "reason": observation["decision"]["reason"]})
-    page_size = settings["reporting"]["boxes_per_page"]
-    pages = []
-    for page, start in enumerate(range(1, len(summaries), page_size), 1):
-        name = f"checkpoint_boxes_{page:03d}"
-        boxes([real] + summaries[start:start + page_size], ["Real"] + labels[start:start + page_size], folder / name,
-              "Checkpoint scores - x axis: epoch", synthetic)
-        pages.append(name)
-    figure, axis = plt.subplots(figsize=(9, 4.5))
-    axis.plot([r["epoch"] for r in rows], [r["distance"] for r in rows], marker="o", color="#317b85", label="Checkpoint distance")
-    axis.axhline(settings["early_stopping"]["target_tolerance"], color="#b47827", linestyle="--", label="Target tolerance")
-    best = observations[-1]["decision"]["best_epoch"]
-    axis.axvline(best, color="#44545b", linestyle=":", label=f"Best: epoch {best}")
-    axis.set(xlabel="Epoch", ylabel="Box distance (smaller is closer)", title="SYNTHETIC MOCK trajectory" if synthetic else "Distance to real reference")
-    axis.legend()
-    axis.grid(alpha=.2)
-    figure.tight_layout()
-    save_figure(figure, folder / "distance_curve")
-    write_csv(folder / "history.csv", rows)
-    write_json(folder / "history.json", observations)
-    images = "".join(f'<img src="{name}.png" alt="Checkpoint box plots page {i}">' for i, name in enumerate(pages, 1))
-    decision = observations[-1]["decision"]
-    (folder / "report.html").write_text(f'''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Training evaluation</title>
-<style>body{{font:16px system-ui;max-width:1200px;margin:32px auto;padding:20px;color:#20333b}}img{{max-width:100%}}pre{{white-space:pre-wrap}}</style>
-<h1>Checkpoint monitoring</h1><p>{"SYNTHETIC MOCK - software demonstration only." if synthetic else "Reference-based monitoring; quality and diversity require independent validation."}</p>
-<p>Best epoch: {best}. Latest decision: {html.escape(decision['reason'])}. Stop: {decision['should_stop']}.</p>
-<img src="distance_curve.png" alt="Distance trajectory">{images}<p>All observations: <a href="history.csv">CSV</a> / <a href="history.json">JSON</a>. Individual scores are in each epoch folder. A missing observation does not advance patience.</p></html>''', encoding="utf-8")
+def inference_report(folder,baseline,rows,settings):
+    fig,axes=plt.subplots(1,2,figsize=(12,5),layout='constrained');norm=baseline['normalizers'];stats=[]
+    for ax,key in zip(axes,['quality','defect']):
+        names=['Real target','Generated'] if key=='quality' else ['Real control','Real target','Generated']
+        datasets=[normalized(baseline['target'],norm,key),normalized(rows,norm,key)] if key=='quality' else [normalized(baseline['control'],norm,key),normalized(baseline['target'],norm,key),normalized(rows,norm,key)]
+        ax.boxplot(datasets,showmeans=True);ax.set_xticks(range(1,len(names)+1),names);ax.set_title('Normalized '+key);ax.grid(axis='y',alpha=.2)
+        stats.extend(dict(metric=key,group=name,**box_stats(v)) for name,v in zip(names,datasets))
+    write_csv(Path(folder)/'boxplot_statistics.csv',stats);finish(fig,folder,settings,'Inference evaluation')

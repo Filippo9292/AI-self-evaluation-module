@@ -1,6 +1,5 @@
 name: mock
 adapter: mock
 endpoint: offline
-model: mock-brightness-v1
-max_images: 6
-status: synthetic_demonstration_only
+model: mock-v2
+api_key_env: ''

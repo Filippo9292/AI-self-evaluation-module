@@ -1,0 +1,8 @@
+seed: 42
+references_per_visit: 5
+visits_per_image: 1
+baseline_visits: 3
+real_min_images: 32
+real_max_images: 256
+real_sqrt_multiplier: 4.0
+checkpoint_max_images: 64

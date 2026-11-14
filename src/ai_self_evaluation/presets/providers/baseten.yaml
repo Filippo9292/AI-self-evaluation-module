@@ -1,8 +1,0 @@
-name: baseten
-adapter: baseten_messages
-endpoint: https://inference.baseten.co/v1/systemone
-model: decision-models/baseten-elephant-9b-latest
-api_key_env: BASETEN_API_KEY
-max_images: 16
-status: experimental_live_unverified
-documentation: https://docs.baseten.co/reference/inference-api/system-one

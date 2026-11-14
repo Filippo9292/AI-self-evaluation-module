@@ -1,8 +1,0 @@
-name: perplexity
-adapter: image_parts
-endpoint: https://api.perplexity.ai/v1/decisions
-model: pplx-decider-v1.2
-api_key_env: PERPLEXITY_API_KEY
-max_images: 8
-status: experimental_live_unverified
-documentation: https://docs.perplexity.ai/api-reference/decisions-post

@@ -1,0 +1,3 @@
+prefer_mature: true
+quality_distance_weight: 1.0
+presence_distance_weight: 1.0

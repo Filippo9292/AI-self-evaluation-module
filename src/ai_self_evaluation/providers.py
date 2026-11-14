@@ -1,113 +1,100 @@
-"""One semantic request, explicit image transports. No automatic provider fallback."""
+"""Question-scoped assets and typed decisions; credentials never enter journals."""
 import base64
+import copy
 import io
 import json
 import math
-import time
-
 import numpy as np
 import requests
 from PIL import Image
-
 from .errors import EvaluationError
-from .util import digest
+from .images import prepared_image
+from .util import digest, append_json, records
 
-
-def replace(value, labels):
-    if isinstance(value, str):
-        for key, label in labels.items():
-            value = value.replace(key, label)
+def render(value, bindings):
+    if isinstance(value,str):
+        if value in bindings:return bindings[value]
+        for token,replacement in bindings.items():
+            if isinstance(replacement,str):value=value.replace(token,replacement)
         return value
-    if isinstance(value, list):
-        return [replace(v, labels) for v in value]
-    if isinstance(value, dict):
-        return {k: replace(v, labels) for k, v in value.items()}
+    if isinstance(value,list):return [render(v,bindings) for v in value]
+    if isinstance(value,dict):return {k:render(v,bindings) for k,v in value.items()}
     return value
 
+def payload(config,candidate,positive,negative,previous=None,reverse=False):
+    a,b=(previous,candidate) if reverse else (candidate,previous)
+    records_by_hash={r.sha256:r for r in [a,*positive,*negative]+([b] if b else [])}
+    ids={h:'asset-'+h for h in records_by_hash}
+    bindings={'{candidate}':ids[a.sha256],'{positive_references}':[ids[r.sha256] for r in positive],'{negative_references}':[ids[r.sha256] for r in negative],'{previous}':ids[b.sha256] if b else ''}
+    q=copy.deepcopy(config.protocol['questions'])
+    if reverse:q={'relative_reverse':q['relative']}
+    elif b:q['relative_forward']=q.pop('relative')
+    else:q.pop('relative')
+    body=dict(model=config.provider['model'],state=render(config.protocol['state'],bindings),questions=render(q,bindings))
+    serialized=json.dumps(body);used={h:r for h,r in records_by_hash.items() if ids[h] in serialized}
+    raw={ids[h]:prepared_image(r,config.settings['preprocessing']) for h,r in used.items()}
+    limits=config.provider.get('image_limits')
+    if limits:
+        for data in raw.values():
+            with Image.open(io.BytesIO(data)) as image:
+                if min(image.size)<limits['min_side'] or max(image.size)>limits['max_side']:raise EvaluationError('Prepared image is outside the provider size limits; adjust preprocessing YAML.')
+    body['assets']={key:dict(type='image',format='png',data_base64=base64.b64encode(v).decode()) for key,v in raw.items()}
+    return body,raw,bindings
 
-def build_payload(provider, protocol, images):
-    adapter = provider["adapter"]
-    tokens = ["{candidate_image}"] + [f"{{reference_{i}}}" for i in range(1, 6)]
-    names = ["candidate_C"] + [f"reference_R{i}" for i in range(1, 6)]
-    encoded = [base64.b64encode(im).decode("ascii") for im in images]
-    data_urls = ["data:image/png;base64," + item for item in encoded]
-    if adapter == "image_array":
-        names = [f"Image {i}" for i in range(1, 7)]
-    rendered = replace(protocol, dict(zip(tokens, names)))
-    body = {"model": provider["model"], **rendered}
-    if adapter == "typesafe_assets":
-        body["assets"] = {name: {"type": "image", "format": "png", "data_base64": data} for name, data in zip(names, encoded)}
-    elif adapter == "image_array":
-        body["images"] = data_urls
-    elif adapter in ("image_parts", "baseten_messages"):
-        parts = [{"type": "text", "text": json.dumps(rendered["state"], ensure_ascii=True)}]
-        for name, url in zip(names, data_urls):
-            parts.extend([{"type": "text", "text": name}, {"type": "image_url", "image_url": {"url": url}}])
-        body["state"] = {"messages": [{"role": "user", "content": parts}]} if adapter == "baseten_messages" else parts
-    elif adapter == "celeris_images":
-        body["x_celeris"] = {"images": dict(zip(names, data_urls))}
-    elif adapter != "mock":
-        raise EvaluationError(f"Unknown provider adapter: {adapter}")
-    return body
-
-
-def validate_response(body, result):
-    if not isinstance(result, dict) or not isinstance(result.get("model"), str) or not result["model"]:
-        raise EvaluationError("Provider response has no model identifier.")
-    answers = result.get("answers")
-    if not isinstance(answers, dict) or set(answers) != set(body["questions"]):
-        raise EvaluationError("Response question identifiers do not match the request.")
-    answer = next(iter(answers.values()))
-    if not isinstance(answer, dict):
-        raise EvaluationError("Provider answer must be an object.")
-    if answer.get("type", "score") != "score":
-        raise EvaluationError("Provider returned a non-score answer.")
-    score = answer.get("score")
-    if isinstance(score, bool) or not isinstance(score, (float, int)) or not math.isfinite(score) or not 0 <= score <= 4:
-        raise EvaluationError("Invalid score: expected a finite number from 0 to 4.")
-    probabilities = answer.get("probabilities")
-    if not isinstance(probabilities, dict) or set(probabilities) != {str(i) for i in range(5)}:
-        raise EvaluationError("Missing or unexpected rubric probabilities (expected 0-4).")
-    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1 for v in probabilities.values()):
-        raise EvaluationError("Invalid rubric probability.")
-    if abs(sum(probabilities.values()) - 1) > .03:
-        raise EvaluationError("Rubric probabilities do not sum to one.")
-    if abs(score - sum(int(k) * v for k, v in probabilities.items())) > .07:
-        raise EvaluationError("Score differs from the probability-weighted rubric level.")
-    confidence = answer.get("confidence")
-    if confidence is not None and (isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1):
-        raise EvaluationError("Invalid provider confidence.")
-    return {"score": float(score), "probabilities": probabilities, "confidence": confidence}
-
+def validate_response(body,result):
+    if not isinstance(result,dict) or result.get('model')!=body['model']:raise EvaluationError('Response model differs from the pinned model.')
+    if not isinstance(result.get('answers'),dict) or set(result['answers'])!=set(body['questions']):raise EvaluationError('Response question identifiers differ.')
+    values={}
+    for qid,q in body['questions'].items():
+        a=result['answers'][qid];kind=q['type']
+        if a.get('type')!=kind:raise EvaluationError('Unexpected answer type.')
+        key='score' if kind=='score' else 'noul' if kind=='noul' else None
+        if key:
+            v=a.get(key)
+            if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not 0<=v<=(4 if kind=='score' else 1):raise EvaluationError('Invalid numeric answer.')
+            values[qid]=float(v)
+        else:
+            probs=a.get('probabilities',{})
+            if set(probs)!={'A','B'} or any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not 0<=v<=1 for v in probs.values()) or abs(sum(probs.values())-1)>.03:raise EvaluationError('Invalid A/B probabilities.')
+            values[qid]={k:float(v) for k,v in probs.items()}
+    return values
 
 class Provider:
-    def __init__(self, config):
-        self.config = config
-        self.session = requests.Session()
+    def __init__(self,config):
+        self.config=config;self.session=requests.Session();self.journal=config.output_dir/'requests.jsonl'
+        self.cache={r['request_id']:r for r in records(self.journal)}
 
-    def evaluate(self, body, images):
-        if self.config.provider["adapter"] == "mock":
-            # Deliberately simple synthetic fixture. This is NOT a visual quality model.
-            means = []
-            for raw in images:
-                with Image.open(io.BytesIO(raw)) as image:
-                    means.append(float(np.asarray(image, dtype=float).mean()))
-            score = max(0., min(4., 3.2 - abs(means[0] - float(np.mean(means[1:]))) / 60.))
-            low = min(3, int(score))
-            probabilities = {str(i): 0. for i in range(5)}
-            probabilities[str(low)] = low + 1 - score
-            probabilities[str(low + 1)] = score - low
-            qid = next(iter(body["questions"]))
-            return 200, {"model": self.config.provider["model"], "answers": {qid: {"type": "score", "score": score, "probabilities": probabilities}},
-                         "usage": {"input_tokens": 0, "output_tokens": 0}, "synthetic": True}
-        if not self.config.api_key or self.config.api_key == "PASTE_YOUR_API_KEY_HERE":
-            raise EvaluationError("Set api_key in your private YAML or the provider's environment variable.")
-        headers = {"Authorization": "Bearer " + self.config.api_key, "Content-Type": "application/json",
-                   **self.config.provider.get("headers", {})}
-        response = self.session.post(self.config.provider["endpoint"], headers=headers, json=body,
-                                     timeout=self.config.settings["api"]["timeout_seconds"])
-        try:
-            result = response.json()
-        except ValueError:
-            result = {"error": "Non-JSON provider response", "http_status": response.status_code}
-        return response.status_code, result
+    def evaluate(self,candidate,positive,negative,previous=None,reverse=False):
+        body,raw,bindings=payload(self.config,candidate,positive,negative,previous,reverse);rid=digest(body)
+        if rid in self.cache:return validate_response(body,self.cache[rid]['response'])
+        api=self.config.settings['api'];encoded=json.dumps(body).encode()
+        if len(encoded)>api['max_request_bytes']:raise EvaluationError('Request exceeds max_request_bytes.')
+        attempts=records(self.config.output_dir/'attempts.jsonl')
+        if api['max_calls'] is not None and len(attempts)>=api['max_calls']:raise EvaluationError('Configured max_calls reached.')
+        if self.config.provider['adapter']=='mock':
+            def mean(key):
+                with Image.open(io.BytesIO(raw[key])) as im:return float(np.asarray(im,dtype=float).mean())
+            m=mean(bindings['{candidate}']);target=float(np.mean([mean(x) for x in bindings['{positive_references}']])) if not reverse else 180
+            answers={}
+            for qid,q in body['questions'].items():
+                if q['type']=='score':answers[qid]=dict(type='score',score=float(np.clip(3.4-abs(m-target)/80,0,4)))
+                elif q['type']=='noul':answers[qid]=dict(type='noul',noul=float(np.clip(m/255,0,1)))
+                else:
+                    old=mean(bindings['{previous}']);v=float(np.clip(.5+(m-old)/400,0,1));answers[qid]=dict(type='choice',probabilities={'A':v,'B':1-v})
+            result=dict(model=body['model'],answers=answers,usage=dict(input_tokens=0,output_tokens=0),synthetic=True)
+        else:
+            if not self.config.api_key:raise EvaluationError('Set api_key or its environment variable.')
+            append_json(self.config.output_dir/'attempts.jsonl',dict(request_id=rid))
+            try:response=self.session.post(self.config.provider['endpoint'],json=body,headers={**self.config.provider.get('headers',{}),'Authorization':'Bearer '+self.config.api_key,'Content-Type':'application/json'},timeout=api['timeout_seconds'])
+            except requests.RequestException:raise EvaluationError('Transport failure; attempt recorded, no automatic retry. Re-running can incur a repeated charge.') from None
+            if response.status_code!=200:raise EvaluationError('Provider HTTP '+str(response.status_code)+'; no automatic retry.')
+            try:result=response.json()
+            except ValueError:raise EvaluationError('Provider returned non-JSON content.') from None
+        values=validate_response(body,result)
+        if self.config.api_key:
+            result=json.loads(json.dumps(result).replace(self.config.api_key,'[REDACTED]'))
+        row=dict(request_id=rid,response=result);append_json(self.journal,row);self.cache[rid]=row
+        return values
+
+    def usage(self):
+        return dict(completed_requests=len(self.cache),http_attempts=len(records(self.config.output_dir/'attempts.jsonl')),input_tokens=sum(r['response'].get('usage',{}).get('input_tokens',0) for r in self.cache.values()),output_tokens=sum(r['response'].get('usage',{}).get('output_tokens',0) for r in self.cache.values()))

@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, cite the version and commit used in your experiment."
 title: "AI Self Evaluation Module"
 type: software
-version: 0.1.0
+version: 0.2.0
 license: MIT
 repository-code: "https://github.com/Filippo9292/AI-self-evaluation-module"
 url: "https://github.com/Filippo9292/AI-self-evaluation-module"

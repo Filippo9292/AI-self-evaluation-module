@@ -1,8 +1,0 @@
-name: mercury
-adapter: image_parts
-endpoint: https://api.inceptionlabs.ai/v1/decisions
-model: mercury-decide
-api_key_env: INCEPTION_API_KEY
-max_images: 16
-status: experimental_live_unverified
-documentation: https://docs.inceptionlabs.ai/capabilities/decisions

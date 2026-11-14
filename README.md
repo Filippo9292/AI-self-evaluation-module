@@ -1,209 +1,147 @@
 # AI Self Evaluation Module
 
-Evaluate generated images against real examples, and use checkpoint image evaluations to stop a generative-model training run.
+Evaluate generated images against original-real references and monitor checkpoint quality with a decision API. The trainer supplies images and checkpoints; this package supplies per-image scores, real baselines, temporal comparisons, boxplots and a stopping decision.
 
-This Python package provides **AI Self Evaluation** for an inference folder and **AI Early Stopping** for saved checkpoints. It is independent of CycleGAN, a particular dataset, image orientation, or a single decision-model vendor. The trainer supplies a checkpoint file and a fixed generation panel; the package supplies evaluation, records, plots, a retained best checkpoint, and a stopping decision.
+**Version 0.2.0.** Model architecture and dataset independent: there are no required angle, class-name or filename conventions. The default prompts address visual realness and visible surface defects. For other features, edit the prompt YAML and build a new baseline. A score is a decision model's judgment under the configured rubric, not verified visual accuracy or downstream utility.
 
-**Status: research prototype, version 0.1.0.** The offline workflow is implemented and tested. Live provider adapters are implemented from documented contracts but have not been qualified against paid services in this repository. The included mock demonstration is synthetic and provides no evidence of a judge's visual accuracy or of training improvement. No dataset, model weights, API keys, or thesis-specific results are bundled.
+## Example output
 
-## What it does
+![Example of quality, feature-presence and temporal-preference distributions](docs/assets/output-example.png)
 
-- Builds a real-to-real baseline using randomly drawn candidates and five real reference images per visit.
-- Scores each image three times by default, with fresh random reference panels, and averages the visits before constructing a box plot.
-- Assigns a continuous **0-4 visual-consistency score** to every image in an inference folder.
-- Evaluates a bounded panel generated from one checkpoint at each scheduled observation.
-- Stops after a confirmed approach to the real-score distribution, or a plateau in that approach.
-- Retains a copy of each new best checkpoint, and returns the best observed checkpoint rather than the final one.
-- Saves per-image scores, visit records, quartiles, decisions, token usage and PNG/SVG/HTML reports.
-- Resumes completed requests from its local journal, without recharging for cached completed visits.
+Illustrative output layout: image-level boxplots, original-real references, controller curves and thresholds. This is an output example, not a benchmark or an expected stopping epoch. The illustration uses example scores; changing the prompt changes the measurement and requires a new baseline.
 
-The score is consistency with the chosen references and rubric. It is not a probability that an image is correct, a defect detector, a diversity measure, or a claim of downstream usefulness.
+The package itself generates this three-panel report. Plot spacing, report formats, resolution, update frequency and all stopping settings are configurable in YAML. Inference produces real-versus-generated boxplots and one score row per input image.
+
+### Controller curves and confirmation
+
+![Example controller curves and consecutive confirmation counter](docs/assets/controller-example.png)
+
+The curves make threshold crossings and confirmation resets visible. The last panel counts elapsed consecutive epochs, rather than the number of evaluations. This output is always generated with every training report.
+
+### Inference comparison
+
+![Example real-versus-generated inference distributions](docs/assets/inference-example.png)
+
+An inference folder produces quality and feature-presence boxplots against the real banks. There is no temporal comparison for a single inference folder. These illustrations show output formats and do not prescribe scores or a stopping epoch for a new dataset.
 
 ## Install
 
-Requires Python 3.10 or newer. From a downloaded or cloned repository:
+Requires Python 3.10 or newer. The evaluator does not depend on PyTorch or a particular generator.
 
 ```bash
 python -m venv .venv
-# Windows PowerShell: .venv\Scripts\Activate.ps1
+# Windows: .venv\Scripts\Activate.ps1
 # Linux/macOS: source .venv/bin/activate
 python -m pip install .
-```
-
-For local development use `python -m pip install -e .`. You may put the repository inside your model directory, or install it elsewhere. Copying a directory alone does not attach it to an arbitrary training loop: use the small integration described below.
-
-## Try the offline demo first
-
-```bash
 python -m ai_self_evaluation demo --output demo-workspace
 ```
 
-This creates small synthetic images, evaluates inference, simulates successive generator snapshots, and exercises early stopping using a deliberately simple brightness-based mock evaluator. It makes **zero network calls**. Every plot/report identifies the mock data.
+The demo creates synthetic images and uses a deliberately simple offline mock. It makes zero network calls and tests software behavior, not judge accuracy. Open the report paths printed by the command.
 
-Open:
+## Configure
 
-```text
-demo-workspace/results/inference/inference/report.html
-demo-workspace/results/training/report.html
-```
-
-The demo refuses to overwrite a non-empty output directory. Choose another directory to repeat it. It simulates checkpoint outputs; it does not train a GAN.
-
-## Configure a real evaluation
-
-Copy `configs/evaluation.example.yaml` to a private `evaluation.local.yaml`. All relative paths in that file, including optional configuration files, resolve relative to the file itself, not to the shell's working directory.
+Copy the example YAML files into a private working directory. Relative paths resolve from the main YAML file.
 
 ```yaml
 provider: jev
-api_key: "YOUR_API_KEY"
-real_image_dirs: ["dataset/train/target", "dataset/validation/target"]
+api_key: ""  # or set TYPESAFE_API_KEY
+target_image_dirs: ["dataset/originals/target/train", "dataset/originals/target/validation"]
+control_image_dirs: ["dataset/originals/control/train", "dataset/originals/control/validation"]
 generated_image_dir: "generated"
-output_dir: "outputs/my-experiment"
+output_dir: "outputs/evaluation"
+protocol_file: "protocol.yaml"
+policy_file: "policy.yaml"
+sampling_file: "sampling.yaml"
+reporting_file: "reporting.yaml"
 ```
 
-The real directories are recursively scanned and pooled. Include only the real class/domain you want the generator to reproduce. Exact duplicate real files are excluded using SHA-256. Generated files are all retained: each filename receives its own score row even when contents are identical. PNG, JPEG, WebP, BMP and TIFF are accepted and converted to RGB PNG for the API.
+Each bank pools all listed folders. Supply only original-real images: target examples containing the desired feature, and control examples without it. Keep offline augmentation in the generator's training data, outside these banks. At least six unique originals per bank are required. Exact duplicates are removed from real banks and the banks must be hash-disjoint. Every generated filename is scored, including identical generated contents. Physical-specimen independence and augmentation provenance remain the user's responsibility. Keep a final test set out of calibration banks when it is intended for independent assessment.
 
-The private YAML may contain the API key directly. `evaluation.local.yaml` and `*.local.yaml` are ignored by Git. Output files never serialize the key; keep the private source YAML out of screenshots or uploads. Alternatively, leave `api_key` empty and set the environment variable named in the provider preset. `.env.example` documents names; automatic `.env` loading is not enabled.
+| YAML | Responsibility |
+| --- | --- |
+| `evaluation.example.yaml` | Provider, credentials, folders and component-file paths |
+| `protocol.example.yaml` | State, named questions, instructions and criteria |
+| `policy.example.yaml` | Normalization, cadence, temporal lag, thresholds, smoothing and patience |
+| `selection.example.yaml` | Maturity preference and Q/D weights for checkpoint selection |
+| `sampling.example.yaml` | Five references, visits, baseline sample size, panel cap and seed |
+| `reporting.example.yaml` | Boxplot spacing, first-epoch inclusion, formats, DPI, render frequency and controller curves |
+| `preprocessing.example.yaml` | Shared image conversion and resize |
+| `api.example.yaml` | Timeout, maximum payload size and optional HTTP-attempt cap |
+| Provider preset / `provider_file` | Endpoint, pinned model, adapter and headers |
 
-Use at least six unique real images. An image is excluded from its own reference panel by its original file hash. This does not establish independence between physical specimens, near-duplicates, or acquisitions. Keep a final test set out of the real-image pool when it is intended as an independent final evaluation.
+Component files are optional: omitted files use installed presets. Inline mappings named `policy`, `selection`, `sampling`, `reporting`, `preprocessing` and `api` override their files. A provider key may be placed directly in a private YAML; `*.local.yaml` is ignored. Never commit that private file. Keys are not serialized into reports or request journals.
 
-## State, questions and rubric
+## Four evaluations, three signals
 
-The default protocol is in `configs/protocol.example.yaml` and in the installed package. It preserves the original single-image consistency question:
+1. **Quality:** historical realness question, “How real does candidate C appear, considering the known-real reference images R1-R5?” Five ordered levels: clearly synthetic, mostly synthetic, mixed/uncertain, mostly real, clearly real. Output 0–4.
+2. **Presence:** historical visible-defect question, “Does the candidate show a visible defect on the specimen surface?” Five positive and five negative real references. Output 0–1.
+3. **Relative forward:** historical neutral question, “Which candidate is more visually similar to the reference images?” Current as A, previous as B, five target references.
+4. **Relative reverse:** the same question with candidate positions exchanged.
 
-> How visually consistent is candidate C with the appearance of defects and background in the known-real references R1-R5?
+The first request combines quality, presence and forward comparison. The second contains the reverse comparison. Shared state includes only the candidate; references and the previous image are scoped to the relevant question. Before a matching previous panel exists, only quality and presence are requested. Fixed case identifiers and reference draws are reused across observations. No epoch number or desired stopping epoch is sent to the evaluator.
 
-It defines `state`, one `score` question, contextual instructions, five reference placeholders, and five ordered criteria. It introduces no FDM, CycleGAN or orientation-specific terms. The inherited wording **does mention defects and background**: for a different task the user may edit it, but must build a new baseline.
+## Formula and default policy
 
-Point `protocol_file` at your copy, or put the full protocol under `evaluation:` in the main YAML. Placeholders are `{candidate_image}` and `{reference_1}` through `{reference_5}`. The provider adapter resolves these into the appropriate image references. The package requires one five-level score question in this release; it does not silently turn an arbitrary prompt into a numerical quality measure.
+For each observation, `Q = median(generated quality) / q25(real target quality)`.
 
-See [protocol and statistics](docs/protocol.md) for sampling, scoring and the distance definition.
+`D = (mean(generated presence) - median(real control presence)) / (median(real target presence) - median(real control presence))`.
 
-## Plan and build the real baseline
+For each case, average the probability assigned to the current image in the two A/B orders; `P` is the mean over cases. The historical A/B question has no explicit tie option; 0.5 means balanced model preference. It is not an empirically calibrated probability of improvement.
+
+Apply a trailing median over a **20-epoch horizon** to Q, D and P. With audits every 2 epochs, that is 11 observations including endpoints. Become mature at Q ≥ 1.00 and D ≥ 0.50; remain mature at Q ≥ 0.97 and D ≥ 0.40. Lack of marked progress means P ≤ 0.55. Stop after these conditions remain satisfied for **100 consecutive epochs**. Missing cadence resets smoothing and confirmation; a missing temporal score cannot confirm a plateau. There is no minimum target epoch.
+
+These are logical gates, **not a weighted sum**. Q=1 is the chosen real-quality quartile; D=1 is the real-target presence anchor and D=0 the control anchor. D may fall outside [0,1]. A high D alone does not establish realistic defects. Default thresholds are starting settings to assess for the user's own task, not a universal calibration.
+
+Best-checkpoint selection is separate: prioritize mature observations, then minimize `abs(Q-1) + abs(D-1)` using unsmoothed per-epoch aggregates; ties keep the first checkpoint. Selection weights and maturity preference are configurable in `selection.yaml`. This equal-contribution default distance does not enter the stopping condition. An early-stopping epoch is not automatically the best checkpoint.
+
+## Commands
 
 ```bash
-python -m ai_self_evaluation plan --config evaluation.local.yaml --max-epochs 300
+python -m ai_self_evaluation providers
+python -m ai_self_evaluation plan --config evaluation.local.yaml --max-epochs 800
 python -m ai_self_evaluation baseline --config evaluation.local.yaml
-```
-
-`plan` is read-only, requires no key, and makes no API calls. It estimates baseline, inference and scheduled checkpoint calls, excluding retries and reuse. The baseline is reused by subsequent commands with the same output directory. Both evaluation commands build it automatically if necessary.
-
-For a small live qualification, use a separate configuration/output directory and a small real folder. Inspect the responses, actual model identifier, image capability, score distributions and image judgments before a larger run. A valid response schema does not verify visual correctness.
-
-## Evaluate inference images
-
-```bash
 ai-self-evaluation --config evaluation.local.yaml --images generated --id final
+ai-early-stopping --config evaluation.local.yaml --epoch 100 --images checkpoint-panel --checkpoint generator.pt --stop-exit-code
+python -m ai_self_evaluation report --config evaluation.local.yaml
 ```
 
-Equivalent:
+`plan` is read-only and makes no calls. `report` rebuilds completed outputs without calls. `--stop-exit-code` returns 10 on stop; other successful commands return 0. `--monitor-only` explicitly permits continued observation after a stop decision. A new prompt, model, preprocessing, policy or real bank requires a new output directory; reporting settings can change without reevaluation.
 
-```bash
-python -m ai_self_evaluation evaluate --config evaluation.local.yaml --images generated --id final
-```
-
-Omit `--images` to use `generated_image_dir` from the YAML. Explicit CLI paths resolve from the shell's working directory. Every image gets three visits by default, a mean score and an across-visit standard deviation. There is no automatic filtering or deletion. Use a new `--id` for another image set; changing an existing set under the same ID is rejected.
-
-Results: `outputs/my-experiment/inference/final/`. Open `report.html` for the real/generated box plots and score table. `scores.csv` and `scores.json` contain per-file scores; `comparison.json` contains distribution summaries. PNG and SVG figures can be reused in reports.
-
-## Connect early stopping to your trainer
+## Attach to a training loop
 
 ```python
 from ai_self_evaluation import TrainingMonitor
 
 monitor = TrainingMonitor("evaluation.local.yaml")
-for epoch in range(1, max_epochs + 1):
-    trainer.train_epoch(epoch)
-    if not monitor.due(epoch):
-        continue
-    checkpoint = trainer.save_checkpoint(epoch)
-    images_dir = trainer.generate_fixed_panel(checkpoint, epoch)
-    decision = monitor.observe(epoch, images_dir, checkpoint)
-    if decision["should_stop"]:
-        trainer.load_checkpoint(decision["best_checkpoint"])
-        break
+for epoch in training_epochs:
+    train_one_epoch()
+    if monitor.due(epoch):
+        checkpoint = save_checkpoint(epoch)
+        images = generate_fixed_panel(epoch)  # stable relative filenames for the same inputs
+        decision = monitor.observe(epoch, images, checkpoint)
+        if decision["should_stop"]:
+            break
 ```
 
-The `trainer` methods are integration points, not package APIs. No particular framework is imported. See the complete [integration example](examples/training_integration.py) and [integration contract](docs/integration.md), including how to restore the best at the ordinary epoch budget.
+Save the checkpoint and a stable generation panel **after** the training epoch. The evaluator does not intercept discriminator batches or start training. Saved panels are preserved to compare the same cases with `t-50`; keep them available. The baseline is created automatically if needed. Prebuilding it before training is recommended to check that the real/control anchors can normalize the measurements.
 
-The panel must come from **one saved checkpoint**, use fixed input/seed identities and stable filenames/count, and run without updating weights or normalization statistics. The package verifies filename/count stability, but cannot infer whether the trainer used the correct weights or input seeds. It does not capture fake images from evolving minibatch states.
+## Outputs and costs
 
-Checkpoint integration accepts a **single existing checkpoint file** in this release. Save model/optimizer/scheduler/RNG state together if resuming is required. The package copies each new best into its own output folder before committing the decision; it never deletes source checkpoints. A multi-file trainer can serialize one archive before observation. Keep evaluation outputs outside the input-image folders.
+The output directory contains original-real baseline scores, image scores (QI, D2, both R1 positions and balanced preference), reference manifests, saved checkpoint panels, epoch aggregates, causal decisions, usage counters, boxplot statistics, PNG/PDF/HTML reports and the selected checkpoint. Only outputs, not datasets or API keys, should be shared after review.
 
-For script-based integration:
+Optional `target_max_images` and `control_max_images` caps can limit each baseline bank separately. Default real sample count per bank: `min(N, 256, max(32, ceil(4*sqrt(N))))`; three visits per baseline image, one per generated image, at most 64 checkpoint cases. References remain five per bank per visit. Before temporal comparisons: one request per case/visit; with both orders: two. Inference scores every image in the folder. `plan` gives request-count upper bounds; token billing depends on image preprocessing and provider prices. Completed identical requests are cached. Transport failures are recorded without automatic retry; manually retrying an uncertain request can incur another charge.
 
-```bash
-ai-early-stopping --config evaluation.local.yaml --epoch 30 --images monitoring/epoch_030 --checkpoint checkpoints/epoch_030.pt
-```
+Boxplots summarize **individual-image distributions**. For Q their median equals the unsmoothed controller aggregate; D/P use their mean. The colored line adds temporal smoothing, so it need not cross each box's median. Box spacing every 50 epochs is independent of auditing every 2. The inference report shows real and generated distributions, with the control bank added for presence.
 
-The command prints JSON. The trainer must read `should_stop`, stop normally, and load `best_checkpoint`. Add `--stop-exit-code` to receive exit code **10** on a stopping decision; normal operation returns 0, errors return 2. Copying the module or executing this command does not forcibly kill a separate training process.
+## Provider compatibility
 
-## Settings and stopping rules
+Included: JEV (`jev-1.14.0`, image assets and typed score/noul/choice) and offline mock. Other decision models can be configured through a provider YAML **only if they implement the same image-assets and response contract**. Previous incompatible presets are not advertised as supported. See [provider contract](docs/providers.md) and the official [System One API](https://docs.typesafe.ai/api/system-one) and [image documentation](https://docs.typesafe.ai/images). Response types and pinned model identity are checked; a valid response does not establish visual validity.
 
-Packaged defaults appear in `configs/advanced.example.yaml`. Copy it and set `advanced_file`, or override selected values under `settings:` in the main YAML.
-
-| Setting | Default |
-| --- | ---: |
-| Reference images per visit | 5 |
-| Visits per image | 3 |
-| Maximum real candidates | 256 |
-| Maximum checkpoint candidates | 64 |
-| Observation interval | 1 epoch |
-| Minimum epoch for stopping | 30 |
-| Plateau patience | 30 valid monitored epochs |
-| Additional target window | 10 valid monitored epochs |
-| Target confirmations | 3 consecutive in-tolerance observations |
-| Minimum progress in box distance | 0.005 |
-| Target tolerance in box distance | 0.025 |
-| Target reset tolerance | 0.04 |
-
-These are **engineering defaults**, not validated universal thresholds. The target window suspends plateau stopping while it is being confirmed; marked deterioration resets it. An expired unconfirmed window returns to ordinary plateau logic. The absolute best updates at every smaller distance; patience resets only after sufficient accumulated improvement. Ties keep the earlier checkpoint. Missing evaluations do not consume patience or trigger stopping.
-
-The internal real-score bootstrap diagnostic is saved for interpretation. It does not silently change any threshold. See [policy details](docs/early-stopping.md).
-
-## Provider presets
+## Development
 
 ```bash
-python -m ai_self_evaluation providers
-```
-
-| YAML name | Default model | Implementation status |
-| --- | --- | --- |
-| `jev` | `jev-1.14.0` | Adapter implemented; live qualification pending |
-| `liquid` | `d1-ultra` | Adapter implemented; live qualification pending |
-| `drex` | `drex-max-v1.1` | Adapter implemented; live qualification pending |
-| `perplexity` | `pplx-decider-v1.2` | Experimental; live qualification pending |
-| `mercury` | `mercury-decide` | Experimental; live qualification pending |
-| `baseten` | Elephant default slug | Experimental; live qualification pending |
-| `celeris` | `celeris-1.1-decision` | Experimental; six-image capability also needs qualification |
-| `mock` | `mock-brightness-v1` | Offline synthetic demo only |
-
-Provider YAML files are in `src/ai_self_evaluation/presets/providers/`. Use `provider_file` to select a private edited copy (for example another compatible Baseten slug). Changing the provider/model or preprocessing requires a new baseline. An unchanged service model identifier does not prove unchanged proprietary weights. No fallback to a different model is performed.
-
-[Provider documentation and qualification status](docs/providers.md) lists sources, transport differences and exclusions. In particular, a four-image endpoint cannot run the six-image protocol without changing the experiment; no collage workaround is used.
-
-## Persistence, errors and reproducibility
-
-The output directory binds the real-file manifest, protocol, provider configuration, preprocessing, random seed and sampling settings. Changing these is rejected: select a new output directory. Early-stopping settings are frozen separately after the first training observation.
-
-`requests.jsonl` stores image identifiers/hashes, reference order, prepared-image hashes, payload digests, raw redacted responses, per-level probabilities, latency and token usage. It omits image base64 and authorization headers. A started request is recorded before dispatch. Completed valid visits are cached; uncertain transport outcomes require review and explicit `api.retry_failed_requests: true` before resubmission. This avoids silently assuming an unreceived answer was not billed.
-
-Only HTTP 429 is retried automatically (bounded exponential backoff). Other HTTP errors and timeouts stop evaluation. A failure interrupts the observation without a policy update. A configured `api.max_calls` is a cumulative attempt ceiling in the output directory, including retries; the default is `null`. There are no interactive budget prompts. Change the YAML ceiling before resuming if desired.
-
-`usage.json` contains actual attempts and provider-reported token totals, not an invoice. No universal price is assumed. Writes for committed decisions/configuration are atomic, and a run lock prevents concurrent writers. After a forcibly killed process, inspect the lock PID and remove `.run.lock` only if that process has ended. An interrupted journal line must be repaired explicitly; it is never silently discarded.
-
-```bash
-python -m ai_self_evaluation report --config evaluation.local.yaml
-```
-
-Regenerates reports from completed records without new API requests. See [output schema](docs/outputs.md).
-
-## Test and publish
-
-```bash
+python -m pip install -e .
 python -m unittest discover -s tests -v
 ```
 
-Tests cover policy semantics, target confirmation, failures without patience updates, checkpoint preservation, resume/idempotency, manifest/protocol drift, reference exclusion, score validation, transport construction, call ceilings and credential omission. GitHub Actions is configured for Windows/Linux and Python 3.10/3.12; hosted CI results are pending until publication.
-
-The repository uses the MIT license. Before a public release, fill in author/repository/DOI metadata in `CITATION.cff`, run live qualification for whichever providers will be advertised as verified, and pin a release tag/commit for the thesis. Private configuration, generated runs and checkpoints are excluded from Git. See [contributing](CONTRIBUTING.md).
+See [protocol](docs/protocol.md), [integration](docs/integration.md), [early stopping](docs/early-stopping.md) and [outputs](docs/outputs.md). MIT license. No model weights, private configuration or dataset is included. Version 0.2 changes the configuration and measurement contract; do not reuse a 0.1 baseline.

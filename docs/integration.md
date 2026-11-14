@@ -1,50 +1,9 @@
-# Trainer integration contract
+# Training and inference integration
 
-The package intentionally imports no PyTorch, TensorFlow, GAN implementation, dataset loader or orientation logic. It reads images and a checkpoint file produced by the host trainer.
+Install the package and configure original-real target/control banks. The model's training dataset may contain offline augmentation; never point the real banks at that folder. The software cannot infer original status from pixels.
 
-## Four responsibilities of the trainer
+The trainer calls `TrainingMonitor.due(epoch)` and, when due, saves a checkpoint and generates a bounded panel. Call `observe(epoch, panel_directory, checkpoint_file)`. Stable relative filenames must identify the same source inputs or latent seeds through training. The monitor selects a deterministic bounded subset, freezes the filenames and copies images into the observation output. It compares with the stored panel at the configured earlier epoch.
 
-1. Finish a scheduled epoch and save a stable checkpoint file before evaluating it.
-2. Generate an observation panel from those exact weights, with fixed latent seeds or source inputs, stable filenames and a stable image count.
-3. Call `TrainingMonitor.observe(epoch, images_dir, checkpoint)` and act on the returned decision.
-4. Restore `best_checkpoint` after early stopping or at the ordinary maximum epoch budget.
+The returned decision includes `should_stop`, smoothed signals and `best`. The trainer decides how to interrupt its loop. Resume the last completed observation with the same images/checkpoint without paying again. Changed completed inputs are rejected. A partial stage resumes completed cached requests; transport failures are not retried automatically.
 
-Use an evaluation/inference mode, disable gradient tracking, and avoid updates to batch-normalization statistics during panel generation. Restore the previous training mode afterward. A complete resumable checkpoint may need generator/discriminator states, optimizers, schedulers, epoch, random-number states and mixed-precision state. The module treats checkpoint bytes as opaque; use the format appropriate to your framework.
-
-This release copies a single checkpoint file. If your model uses multiple files, archive them into one file before passing it to the monitor, and unpack when restoring. No source file is deleted. Every newly best checkpoint remains in the output tree, so provision disk space or archive runs afterward. Automatic checkpoint pruning is not implemented.
-
-## Minimal Python pattern
-
-See [examples/training_integration.py](../examples/training_integration.py). `TrainingMonitor.due(epoch)` checks the configured observation interval. `observe` returns:
-
-```json
-{
-  "evaluated": true,
-  "last_epoch": 45,
-  "should_stop": false,
-  "reason": "continue",
-  "best_epoch": 40,
-  "best_distance": 0.03,
-  "best_checkpoint": "/absolute/output/checkpoints/epoch_000040/checkpoint.pt"
-}
-```
-
-Additional state fields are returned for audit. Epochs are one-based positive integers. `observe` on an unscheduled epoch returns `evaluated: false` and does not inspect images or call an API. The caller must stop when a prior decision says stop.
-
-Generation panel filenames are validated across observations, including unselected available slots. The package cannot prove that the same filenames correspond to the same latent inputs, or that images were generated from the passed checkpoint. These are trainer responsibilities. Checkpoint panels are sampled deterministically by slot to the configured cap, with fresh reference panels at each visit.
-
-## Command-line pattern
-
-Run the model-specific training step/panel generation first, then call:
-
-```bash
-ai-early-stopping --config evaluation.local.yaml --epoch 50 --images generated/epoch_050 --checkpoint checkpoints/epoch_050.pt --stop-exit-code
-```
-
-Read stdout JSON and return code: 0 = completed/continue (or unscheduled), 10 = stop requested when this flag is enabled, 2 = error. No signals are sent to your trainer. The original training command cannot be modified automatically by dropping a folder into its directory.
-
-For multi-GPU or distributed training, call the observer from one coordinator only and broadcast the returned decision. Synchronize workers before snapshot/panel generation. The run lock prevents multiple writers to the same output directory; it is not a distributed process barrier.
-
-## Future model-specific example
-
-A CycleGAN adapter can later choose the intended translation direction and maintain one configuration/output tree per acquisition group. Nothing in the current generic module assumes two generators, adversarial losses, defective/healthy folder naming, or two orientations. There is no real CycleGAN validation claim in this release.
+Inference calls `Engine(Config(path)).evaluate(images_directory, identifier)` or the CLI `evaluate`. It evaluates all input files, without a temporal comparison, and writes per-image quality/presence scores and distribution plots. Use a safe stable identifier. CLI operations lock their output directories; the monitor locks its own operations.

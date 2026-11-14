@@ -4,9 +4,8 @@ endpoint: https://api.typesafe.ai/v1/systemone
 model: jev-1.14.0
 api_key_env: TYPESAFE_API_KEY
 headers:
-  TypeSafe-Danger-Zone-Images: "true"
-max_images: 6
-preprocessing:
+  TypeSafe-Danger-Zone-Images: 'true'
+documentation: https://docs.typesafe.ai/api/system-one
+image_limits:
   min_side: 280
-status: implementation_available_live_unverified
-documentation: https://docs.typesafe.ai/images
+  max_side: 1568

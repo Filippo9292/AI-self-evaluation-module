@@ -1,0 +1,4 @@
+max_side: 384
+min_side: 280
+resize: null
+interpolation: nearest

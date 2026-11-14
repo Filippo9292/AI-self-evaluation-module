@@ -1,0 +1,8 @@
+boxplot_every_epochs: 50
+include_first_epoch: true
+formats:
+- png
+- pdf
+- html
+dpi: 160
+render_every_observations: 1

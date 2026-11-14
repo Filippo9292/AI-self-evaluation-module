@@ -1,21 +1,45 @@
 state:
-  candidate: "{candidate_image}"
+  candidate: '{candidate}'
 questions:
-  visual_consistency:
+  quality:
     type: score
     instructions:
-      context: >-
-        Six images are supplied: candidate C is `candidate` in the state;
-        five known-real reference images R1-R5 are supplied below in order.
-        Compare C with the visual appearance of defects and background in R1-R5.
-        The candidate may or may not come from the same real-image distribution.
-      references: ["{reference_1}", "{reference_2}", "{reference_3}", "{reference_4}", "{reference_5}"]
-      question: >-
-        How visually consistent is candidate C with the appearance of defects
-        and background in the known-real references R1-R5?
+      context: 'Six images are supplied: candidate C is `candidate` in the state;
+        five known-real reference images R1-R5 are supplied below in order. Compare
+        C with the visual appearance of defects and background in R1-R5. The candidate
+        may be real or synthetic.'
+      references: '{positive_references}'
+      question: How real does candidate C appear, considering the known-real reference
+        images R1-R5?
     criteria:
-      - Clearly inconsistent with the references
-      - Mostly inconsistent with the references
-      - Mixed or uncertain consistency with the references
-      - Mostly consistent with the references
-      - Highly consistent with the references
+    - Clearly synthetic
+    - Mostly synthetic
+    - Mixed or uncertain realness
+    - Mostly real
+    - Clearly real
+  presence:
+    type: noul
+    instructions:
+      context: The candidate is `candidate` in the state. The five images in G1 are
+        real surfaces with defects. The five images in G2 are real surfaces without
+        defects. Judge visible defects on the specimen surface, not the image border
+        or acquisition background.
+      G1: '{positive_references}'
+      G2: '{negative_references}'
+      question: Does the candidate show a visible defect on the specimen surface?
+    criteria:
+      'true': A visible surface defect is present on the specimen.
+      'false': No visible surface defect is present on the specimen.
+  relative:
+    type: choice
+    instructions:
+      context: 'Seven images are supplied: candidate A is `candidate` in the state;
+        candidate B is supplied below; the five reference images R1-R5 are supplied
+        below in order. Compare the visual appearance of the two candidates with the
+        reference set.'
+      candidate_B: '{previous}'
+      references: '{positive_references}'
+      question: Which candidate is more visually similar to the reference images?
+    criteria:
+      A: null
+      B: null

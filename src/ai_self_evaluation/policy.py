@@ -1,52 +1,26 @@
-"""Pure, serializable state machine; a missing observation never enters this function."""
-import copy
+"""Causal hysteresis and elapsed-epoch confirmation, independent of model/domain."""
+import numpy as np
 
-from .errors import EvaluationError
-
-
-def advance(previous, epoch, distance, settings):
-    state = copy.deepcopy(previous) if previous else {
-        "last_epoch": None, "best_epoch": None, "best_distance": None,
-        "progress_reference": None, "stalled_epochs": 0,
-        "target_start_epoch": None, "target_valid_epochs": 0,
-        "target_confirmations": 0, "should_stop": False, "reason": "continue"}
-    if state["should_stop"]:
-        raise EvaluationError("This run has already stopped; use a new output directory for a new run.")
-    last = state["last_epoch"]
-    if last is not None and epoch <= last:
-        raise EvaluationError("Observation epochs must increase strictly.")
-    # Skipped/failed evaluations do not count as multiple observations of no progress.
-    elapsed = 0 if last is None else min(epoch - last, settings["every_n_epochs"])
-    improved_best = state["best_distance"] is None or distance < state["best_distance"]
-    if improved_best:
-        state.update(best_epoch=epoch, best_distance=distance)
-    reference = state["progress_reference"]
-    if reference is None or reference - distance >= settings["min_delta"] - 1e-12:
-        state.update(progress_reference=distance, stalled_epochs=0)
-    elif epoch > settings["min_epochs"]:
-        state["stalled_epochs"] += min(elapsed, epoch - settings["min_epochs"])
-    if epoch >= settings["min_epochs"]:
-        if distance > settings["target_reset_tolerance"]:
-            state.update(target_start_epoch=None, target_valid_epochs=0, target_confirmations=0)
-        elif distance <= settings["target_tolerance"]:
-            if state["target_start_epoch"] is None:
-                state["target_start_epoch"] = epoch
-            else:
-                state["target_valid_epochs"] += elapsed
-            state["target_confirmations"] += 1
-        else:
-            # Hysteresis keeps the observation window, but requires renewed confirmation.
-            if state["target_start_epoch"] is not None:
-                state["target_valid_epochs"] += elapsed
-            state["target_confirmations"] = 0
-        if state["target_start_epoch"] is not None and state["target_valid_epochs"] >= settings["post_target_epochs"] and state["target_confirmations"] >= settings["target_confirmations"]:
-            state.update(should_stop=True, reason="target_reached_and_confirmed")
-        else:
-            if state["target_start_epoch"] is not None and state["target_valid_epochs"] >= settings["post_target_epochs"]:
-                # An unconfirmed target window expires; ordinary plateau logic resumes.
-                state.update(target_start_epoch=None, target_valid_epochs=0, target_confirmations=0)
-            if state["target_start_epoch"] is None and state["stalled_epochs"] >= settings["plateau_patience_epochs"]:
-                state.update(should_stop=True, reason="plateau")
-    state["last_epoch"] = epoch
-    state["improved_best"] = improved_best
-    return state
+def replay(events, policy):
+    active=False;since=None;history=[];trace=[];stop=None;last=None
+    cadence=policy['audit_every_epochs']
+    for event in events:
+        e=event['epoch']
+        if last is not None and e<=last:raise ValueError('Epochs must increase.')
+        if last is not None and e-last!=cadence:active=False;since=None;history=[]
+        history.append(event)
+        window=[r for r in history if e-policy['smoothing_horizon_epochs']<=r['epoch']<=e]
+        full=len(window)==policy['smoothing_horizon_epochs']//cadence+1 and window[0]['epoch']==e-policy['smoothing_horizon_epochs']
+        q=float(np.median([r['quality'] for r in window]));d=float(np.median([r['defect'] for r in window]))
+        pp=[r['progress'] for r in window];p=None if any(v is None for v in pp) else float(np.median(pp))
+        if not full:active=False
+        elif active:active=q>=policy['quality_exit_ratio'] and d>=policy['defect_exit_normalized']
+        else:active=q>=policy['quality_enter_ratio'] and d>=policy['defect_enter_normalized']
+        no_gain=p is not None and p<=policy['progress_max'];eligible=bool(full and active and no_gain)
+        if not eligible:since=None
+        elif since is None:since=e
+        elapsed=0 if since is None else e-since
+        if stop is None and since is not None and elapsed>=policy['confirmation_epochs']:stop=e
+        trace.append(dict(epoch=e,quality_smooth=q,defect_smooth=d,progress_smooth=p,mature=bool(active),no_progress=bool(no_gain),eligible=eligible,confirmation_start=since,elapsed=elapsed,first_stop=stop==e,should_stop=stop is not None,first_stop_epoch=stop))
+        last=e
+    return trace

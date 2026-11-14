@@ -1,0 +1,10 @@
+quality_real_quantile: 0.25
+quality_enter_ratio: 1.0
+quality_exit_ratio: 0.97
+defect_enter_normalized: 0.5
+defect_exit_normalized: 0.4
+progress_max: 0.55
+smoothing_horizon_epochs: 20
+confirmation_epochs: 100
+audit_every_epochs: 2
+comparison_lag_epochs: 50

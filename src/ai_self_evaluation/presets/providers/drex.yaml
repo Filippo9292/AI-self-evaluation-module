@@ -1,8 +1,0 @@
-name: drex
-adapter: image_array
-endpoint: https://console.nace.ai/v1/systemone
-model: drex-max-v1.1
-api_key_env: NACE_API_KEY
-max_images: 8
-status: implementation_available_live_unverified
-documentation: https://console.nace.ai/docs/drex/guides/drex-max

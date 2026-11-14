@@ -1,9 +1,0 @@
-name: celeris
-adapter: celeris_images
-endpoint: https://inference.celeris.ai/celeris-1-decision/v1/systemone
-model: celeris-1.1-decision
-api_key_env: CELERIS_API_KEY
-# Six-image capability must be qualified on the actual service before research use.
-max_images: 6
-status: experimental_six_image_limit_unverified
-documentation: https://celeris.ai/decisions
