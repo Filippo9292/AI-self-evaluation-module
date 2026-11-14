@@ -12,6 +12,8 @@ Illustrative output layout: image-level boxplots, original-real references, cont
 
 The package itself generates this three-panel report. Plot spacing, report formats, resolution, update frequency and all stopping settings are configurable in YAML. Inference produces real-versus-generated boxplots and one score row per input image.
 
+Teal boxes represent generated images; blue-grey boxes represent real references. Dark center lines show medians, and colored markers show means where required by the aggregation rule.
+
 ### Controller curves and confirmation
 
 ![Example controller curves and consecutive confirmation counter](docs/assets/controller-example.png)

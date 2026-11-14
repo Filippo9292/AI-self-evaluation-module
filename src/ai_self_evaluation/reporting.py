@@ -8,6 +8,28 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from .util import read_json,write_csv
 
+GENERATED='#008e96'
+GENERATED_FILL='#bde4e1'
+REAL_TARGET='#cbd5e1'
+REAL_CONTROL='#e8edf3'
+INK='#26384a'
+EDGE='#8797a8'
+
+def style_figure(fig):
+    fig.set_facecolor('#f8fafc')
+    for ax in fig.axes:
+        ax.set_facecolor('white');ax.set_axisbelow(True)
+        for side in ('top','right'):ax.spines[side].set_visible(False)
+        for side in ('left','bottom'):
+            ax.spines[side].set_color('#bdc8d4');ax.spines[side].set_linewidth(.8)
+        ax.tick_params(colors=INK,labelsize=9)
+        ax.title.set_color(INK);ax.xaxis.label.set_color(INK);ax.yaxis.label.set_color(INK)
+        ax.grid(axis='y',color='#dce4ed',alpha=.75,linewidth=.7)
+        legend=ax.get_legend()
+        if legend:
+            legend.get_frame().set_facecolor('white');legend.get_frame().set_edgecolor('#dce4ed');legend.get_frame().set_alpha(.95)
+    if fig._suptitle:fig._suptitle.set_color(INK)
+
 def normalized(rows,norm,key):
     if key=='quality':return [r['QI']/norm['quality_reference'] for r in rows]
     if key=='defect':return [(r['D2']-norm['healthy_reference'])/norm['defect_span'] for r in rows]
@@ -19,6 +41,7 @@ def box_stats(values):
 
 def finish(fig,folder,settings,title):
     folder=Path(folder);folder.mkdir(parents=True,exist_ok=True);buffer=io.BytesIO()
+    style_figure(fig)
     fig.savefig(buffer,format='png',dpi=settings['dpi'])
     if 'png' in settings['formats']:(folder/'boxplots.png').write_bytes(buffer.getvalue())
     if 'pdf' in settings['formats']:fig.savefig(folder/'boxplots.pdf')
@@ -36,7 +59,7 @@ def training_report(root,baseline,observations,settings,policy=None):
     for k,(ax,key,title) in enumerate(zip(axes,keys,titles)):
         for bank,x in ([('target',-40)] if k==0 else [('control',-90),('target',-40)] if k==1 else []):
             values=normalized(baseline[bank],norm,key)
-            ax.boxplot([values],positions=[x],widths=22,manage_ticks=False,patch_artist=True,boxprops=dict(facecolor='#c2c8d0'),flierprops=dict(marker='.',markersize=2))
+            ax.boxplot([values],positions=[x],widths=22,manage_ticks=False,patch_artist=True,boxprops=dict(facecolor=REAL_TARGET if bank=='target' else REAL_CONTROL,edgecolor=EDGE,linewidth=.9),medianprops=dict(color=INK,linewidth=1.5),whiskerprops=dict(color=EDGE),capprops=dict(color=EDGE),flierprops=dict(marker='o',markersize=2,markerfacecolor=EDGE,markeredgecolor='none',alpha=.5))
             stats.append(dict(metric=key,epoch='',group='real_'+bank,**box_stats(values)))
         positions=[];data=[]
         for o in observations:
@@ -44,8 +67,8 @@ def training_report(root,baseline,observations,settings,policy=None):
             if values:stats.append(dict(metric=key,epoch=o['epoch'],group='generated',**box_stats(values)))
             if o in selected and values:positions.append(o['epoch']);data.append(values)
         if data:
-            ax.boxplot(data,positions=positions,widths=min(settings['boxplot_every_epochs']*.5,24),manage_ticks=False,patch_artist=True,boxprops=dict(facecolor='#9ed7d4',alpha=.6),medianprops=dict(color='#152b36'),flierprops=dict(marker='.',markersize=2,alpha=.4))
-            if k>0:ax.scatter(positions,[np.mean(v) for v in data],color='#008e96',s=13,label='Per-epoch mean')
+            ax.boxplot(data,positions=positions,widths=min(settings['boxplot_every_epochs']*.5,24),manage_ticks=False,patch_artist=True,boxprops=dict(facecolor=GENERATED_FILL,edgecolor='#75a8a5',linewidth=.9),medianprops=dict(color=INK,linewidth=1.4),whiskerprops=dict(color=EDGE),capprops=dict(color=EDGE),flierprops=dict(marker='o',markersize=2,markerfacecolor=EDGE,markeredgecolor='none',alpha=.45))
+            if k>0:ax.scatter(positions,[np.mean(v) for v in data],color=GENERATED,s=18,edgecolors='white',linewidths=.45,zorder=4,label='Per-epoch mean')
         curve=[o for o in observations if o['decision'][key+'_smooth'] is not None]
         if curve:ax.plot([o['epoch'] for o in curve],[o['decision'][key+'_smooth'] for o in curve],color='#008e96',label='Smoothed controller aggregate')
         ts=[threshold['quality_enter_ratio'],threshold['quality_exit_ratio']] if k==0 else [threshold['defect_enter_normalized'],threshold['defect_exit_normalized']] if k==1 else [threshold['progress_max']]
@@ -53,7 +76,7 @@ def training_report(root,baseline,observations,settings,policy=None):
         stop=next((o['epoch'] for o in observations if o['decision']['first_stop']),None)
         if stop is not None:ax.axvline(stop,color='#c33',ls=':',label='First stop '+str(stop))
         xmax=max(o['epoch'] for o in observations);xticks=list(range(0,xmax+1,max(50,50*((xmax//10)//50))))
-        ax.set_xticks(([-40] if k==0 else [-90,-40] if k==1 else [])+xticks,(['Real target'] if k==0 else ['Real control','Real target'] if k==1 else [])+[str(x) for x in xticks],fontsize=8)
+        ax.set_xticks(([-40] if k==0 else [-90,-40] if k==1 else [])+xticks,(['Real\ntarget'] if k==0 else ['Real\ncontrol','Real\ntarget'] if k==1 else [])+[str(x) for x in xticks],fontsize=8)
         ax.set_title(title);ax.set_xlabel('Epoch');ax.set_xlim(-120,max(70,xmax+20));ax.grid(axis='y',alpha=.2);ax.legend(fontsize=8,loc='best')
     fig.suptitle('Reference-based evaluation: image distributions and early-stopping signals')
     write_csv(root/'training/boxplot_statistics.csv',stats)
@@ -77,6 +100,7 @@ def controller_curves(folder,observations,settings,policy):
     if stop is not None:
         for ax in axes:ax.axvline(stop,color='#c33',ls=':')
     fig.suptitle('Controller signals and confirmation'+(' - first stop '+str(stop) if stop is not None else ''))
+    style_figure(fig)
     buffer=io.BytesIO();fig.savefig(buffer,format='png',dpi=settings['dpi'])
     if 'png' in settings['formats']:(folder/'curves.png').write_bytes(buffer.getvalue())
     if 'pdf' in settings['formats']:fig.savefig(folder/'curves.pdf')
@@ -90,6 +114,11 @@ def inference_report(folder,baseline,rows,settings):
     for ax,key in zip(axes,['quality','defect']):
         names=['Real target','Generated'] if key=='quality' else ['Real control','Real target','Generated']
         datasets=[normalized(baseline['target'],norm,key),normalized(rows,norm,key)] if key=='quality' else [normalized(baseline['control'],norm,key),normalized(baseline['target'],norm,key),normalized(rows,norm,key)]
-        ax.boxplot(datasets,showmeans=True);ax.set_xticks(range(1,len(names)+1),names);ax.set_title('Normalized '+key);ax.grid(axis='y',alpha=.2)
+        boxes=ax.boxplot(datasets,showmeans=True,patch_artist=True,medianprops=dict(color=INK,linewidth=1.6),whiskerprops=dict(color=EDGE,linewidth=1),capprops=dict(color=EDGE),flierprops=dict(marker='o',markersize=3,markerfacecolor=EDGE,markeredgecolor='none',alpha=.5),meanprops=dict(marker='D',markersize=5,markerfacecolor=GENERATED,markeredgecolor='white',markeredgewidth=.7))
+        fills=[REAL_TARGET,GENERATED_FILL] if key=='quality' else [REAL_CONTROL,REAL_TARGET,GENERATED_FILL]
+        for i,(box,fill) in enumerate(zip(boxes['boxes'],fills)):
+            box.set(facecolor=fill,edgecolor='#75a8a5' if i==len(fills)-1 else EDGE,linewidth=1.1)
+            if i<len(fills)-1:boxes['means'][i].set_markerfacecolor('#60758d')
+        ax.set_xticks(range(1,len(names)+1),names);ax.set_title('Normalized '+key);ax.grid(axis='y',alpha=.2)
         stats.extend(dict(metric=key,group=name,**box_stats(v)) for name,v in zip(names,datasets))
     write_csv(Path(folder)/'boxplot_statistics.csv',stats);finish(fig,folder,settings,'Inference evaluation')
